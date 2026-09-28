@@ -200,6 +200,12 @@ async function onClick(e) {
 }
 
 async function addTarget(lon, lat, h = +$('th').value) {
+  if (site) {  // 비스듬한 화면에서 먼 곳이 찍히는 실수 방지 + 건물 조회 범위 제한
+    const [x, y] = center(data[site].geometry);
+    const d = Math.hypot((lon - x) * 111320 * Math.cos(y * Math.PI / 180), (lat - y) * 110574);
+    if (d > 3000) return msg(`부지에서 ${(d / 1000).toFixed(1)}km 떨어진 점입니다. 3km 이내만 찍을 수 있어요`);
+  }
+  msg('');
   const [gl] = await terrainHeights([[lon, lat]]);
   targets.push({ lon, lat, h, gl });
   $('tn').textContent = targets.length;
