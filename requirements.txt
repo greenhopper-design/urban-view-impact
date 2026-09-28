@@ -1,0 +1,5 @@
+requests
+numpy
+shapely>=2.0
+# 선택(로컬 전용): DEM(지반고) 사용 시
+# rasterio

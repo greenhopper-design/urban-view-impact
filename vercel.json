@@ -1,0 +1,8 @@
+{
+  "buildCommand": "node build.mjs",
+  "outputDirectory": "public",
+  "regions": ["icn1"],
+  "functions": {
+    "api/*.py": { "maxDuration": 60, "includeFiles": "viewimpact.py" }
+  }
+}

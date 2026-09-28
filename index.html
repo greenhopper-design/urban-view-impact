@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Urban View Impact</title>
+<!-- 브이월드 WebGL 3D 3.0 (Cesium 기반). 키는 서버가 주입 -->
+<script src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey={{VWORLD_KEY}}"></script>
+<style>
+  body { margin: 0; display: flex; height: 100vh; font: 14px system-ui, sans-serif; background: #fff; color: #222; }
+  #map { flex: 1; position: relative; }
+  #side { width: 340px; padding: 12px 14px; overflow: auto; box-sizing: border-box; border-left: 1px solid #ddd; }
+  h3 { margin: 0 0 8px; }
+  fieldset { border: 1px solid #ddd; margin: 8px 0; }
+  label { display: block; margin: 5px 0; }
+  input[type=number] { width: 70px; }
+  button { margin: 3px 0; cursor: pointer; }
+  #msg { color: #b33; display: block; margin: 6px 0; }
+  table { border-collapse: collapse; font-size: 12px; }
+  td, th { padding: 2px 6px; text-align: right; border-bottom: 1px solid #eee; }
+  .row { cursor: pointer; padding: 3px 0; border-bottom: 1px solid #eee; }
+  .row:hover { background: #f4f4f4; }
+  .legend span { display: inline-block; width: 14px; height: 10px; margin: 0 3px 0 8px; }
+  @media (max-width: 700px) { body { flex-direction: column; } #side { width: auto; height: 45vh; border: 0; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="side">
+  <h3>Urban View Impact</h3>
+  <fieldset><legend>클릭 모드</legend>
+    <label><input type="radio" name="mode" value="site" checked> 신축 부지(건물) 선택</label>
+    <label><input type="radio" name="mode" value="target"> 조망대상 점 찍기</label>
+    <label><input type="radio" name="mode" value="view"> 결과 보기 (층별 표)</label>
+    <label>대상 높이(지반 위, m) <input id="th" type="number" value="0"></label>
+    <button id="namsan">남산타워 추가</button>
+    <button id="clearT">대상 지우기</button>
+    <div>조망대상 <b id="tn">0</b>개 (한강은 수면을 따라 여러 점)</div>
+  </fieldset>
+
+  <label>신축 부지: <b id="siteName">-</b></label>
+  <label>신축 층수 <input id="nf" type="number" value="30"></label>
+  <label>층고(m) <input id="fh" type="number" value="3.0" step="0.1"></label>
+  <label>분석 반경(m) <input id="rad" type="number" value="300"></label>
+  <label><input type="checkbox" id="real" checked> 브이월드 실사 건물 표시</label>
+  <button id="run">분석</button>
+  <span id="msg"></span>
+  <div class="legend">층별 감소
+    <span style="background:#e0e0e0"></span>0 <span style="background:#fd8d3c"></span>~25%p <span style="background:#bd0026"></span>50%p+
+  </div>
+  <div id="detail"></div>
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const mode = () => document.querySelector('[name=mode]:checked').value;
+const setMode = m => { document.querySelector(`[name=mode][value=${m}]`).checked = true; };
+const msg = t => { $('msg').textContent = t || ''; };
+const fh = () => +$('fh').value;
+const SEOUL = [126.76, 37.41, 127.19, 37.72];  // 분석 범위: 서울 (경도·위도 min/max)
+const inSeoul = ([x, y]) => x >= SEOUL[0] && x <= SEOUL[2] && y >= SEOUL[1] && y <= SEOUL[3];
+const data = {}, glCache = {};   // id -> 건물, id -> 지반고
+let viewer, layer, site = null, siteFeature = null, targets = [], results = {};
+
+// ---------------------------------------------------------------- 기하 유틸
+const rings = g => g.type === 'Polygon' ? [g.coordinates[0]] : g.coordinates.map(p => p[0]);
+const center = g => {
+  const c = g.coordinates.flat(Infinity), n = c.length / 2;
+  let x = 0, y = 0;
+  for (let i = 0; i < c.length; i += 2) { x += c[i]; y += c[i + 1]; }
+  return [x / n, y / n];
+};
+function inside([x, y], g) {
+  return rings(g).some(r => {
+    let c = false;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      const [xi, yi] = r[i], [xj, yj] = r[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  });
+}
+function around([lon, lat], m) {
+  const dy = m / 110574, dx = m / (111320 * Math.cos(lat * Math.PI / 180));
+  return [lon - dx, lat - dy, lon + dx, lat + dy];
+}
+function color(drop) {
+  if (drop <= 0) return Cesium.Color.fromCssColorString('#e0e0e0');
+  const t = Math.min(drop / 50, 1);  // 0 -> 50%p
+  return Cesium.Color.fromBytes(253 - 64 * t, 141 - 141 * t, 60 - 22 * t);
+}
+
+// ---------------------------------------------------------------- 데이터
+async function loadBuildings(bbox) {
+  const r = await fetch(`/api/buildings?bbox=${bbox.join(',')}`).then(r => r.json());
+  if (r.error) throw new Error(r.error);
+  for (const f of r.buildings) data[f.id] = f;
+  return r.buildings.map(f => f.id);
+}
+
+// 브이월드 지형에서 지반고 추출 (타원체고 기준이지만 상대 비교라 무관)
+async function terrainHeights(lonlats) {
+  const cartos = lonlats.map(([lon, lat]) => Cesium.Cartographic.fromDegrees(lon, lat));
+  try { await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, cartos); }
+  catch { try { await Cesium.sampleTerrain(viewer.terrainProvider, 15, cartos); }
+          catch { cartos.forEach(c => { c.height = viewer.scene.globe.getHeight(c) || 0; }); } }
+  return cartos.map(c => c.height || 0);
+}
+async function sampleGL(ids) {
+  const need = ids.filter(id => !(id in glCache));
+  if (!need.length) return;
+  // ponytail: 건물 중심 1점만 샘플. 경사지 정밀도가 필요하면 꼭짓점 평균으로
+  const hs = await terrainHeights(need.map(id => center(data[id].geometry)));
+  need.forEach((id, i) => { glCache[id] = hs[i]; });
+}
+
+// ---------------------------------------------------------------- 3D 그리기
+function prism(g, base, top, col, id) {
+  for (const r of rings(g))
+    layer.entities.add({
+      polygon: { hierarchy: Cesium.Cartesian3.fromDegreesArray(r.flat()), height: base, extrudedHeight: top, material: col },
+      properties: { bid: id },
+    });
+}
+function setReal(show) {
+  const walk = c => {
+    for (let i = 0; i < c.length; i++) {
+      const p = c.get(i);
+      if (p instanceof Cesium.Cesium3DTileset) p.show = show;
+      else if (p && p.length !== undefined && p.get) walk(p);
+    }
+  };
+  walk(viewer.scene.primitives);
+}
+function draw() {
+  if (!viewer) return;
+  const real = $('real').checked;
+  setReal(real);
+  if (siteFeature) siteFeature.show = false;  // 실사 모드에서도 부지 기존 건물은 숨김
+  layer.entities.removeAll();
+  const grey = Cesium.Color.fromCssColorString('#bdbdbd').withAlpha(.95);
+  for (const b of Object.values(data)) {
+    const gl = glCache[b.id], r = results[b.id];
+    if (gl === undefined) continue;
+    if (b.id === site) {
+      prism(b.geometry, gl, gl + +$('nf').value * fh(), Cesium.Color.fromCssColorString('#3182bd').withAlpha(.9), b.id);
+    } else if (r && (!real || r.max_drop > 0)) {
+      for (const f of r.floors)  // 층별 슬래브
+        prism(b.geometry, gl + (f.floor - 1) * fh(), gl + f.floor * fh() - 0.3, color(-f.change), b.id);
+    } else if (!real) {
+      prism(b.geometry, gl, gl + Math.max(b.floors, 1) * fh(), grey, b.id);
+    }
+  }
+  for (const t of targets)
+    layer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(t.lon, t.lat, t.gl + t.h + 1),
+      point: { pixelSize: 11, color: Cesium.Color.fromCssColorString('#006d2c'), outlineColor: Cesium.Color.WHITE,
+               outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+}
+
+// ---------------------------------------------------------------- 클릭
+function pickLonLat(pos) {
+  const c = viewer.scene.pickPosition(pos) || viewer.camera.pickEllipsoid(pos);
+  if (!c) return null;
+  const k = Cesium.Cartographic.fromCartesian(c);
+  return [Cesium.Math.toDegrees(k.longitude), Cesium.Math.toDegrees(k.latitude)];
+}
+
+async function onClick(e) {
+  const ll = pickLonLat(e.position);
+  if (!ll) return;
+  if (!inSeoul(ll)) return msg('서울 시내만 분석할 수 있습니다');
+  const picked = viewer.scene.pick(e.position);
+  try {
+    if (mode() === 'target') return await addTarget(ll[0], ll[1]);
+    if (mode() === 'view') {
+      const id = picked && picked.id && picked.id.properties && picked.id.properties.bid.getValue();
+      return id && results[id] && table(id);
+    }
+    // 부지 선택: 클릭 지점을 포함하는 건물 외곽선 찾기
+    msg('건물 찾는 중…');
+    const ids = await loadBuildings(around(ll, 300));
+    let id = ids.find(i => inside(ll, data[i].geometry));
+    if (!id) {  // 벽면 클릭 등: 15m 이내 가장 가까운 건물
+      const d = i => { const c = center(data[i].geometry); return Math.hypot((c[0] - ll[0]) * 88000, (c[1] - ll[1]) * 110574); };
+      id = ids.sort((a, b) => d(a) - d(b))[0];
+      if (!id || d(id) > 15) return msg('건물 외곽선을 찾지 못했습니다');
+    }
+    await sampleGL(ids);
+    if (siteFeature) siteFeature.show = true;
+    siteFeature = picked instanceof Cesium.Cesium3DTileFeature ? picked : null;
+    site = id;
+    results = {};
+    $('out').innerHTML = $('detail').innerHTML = '';
+    $('siteName').textContent = `${data[id].name || id} (현재 ${data[id].floors}층, GL ${glCache[id].toFixed(1)}m)`;
+    msg('');
+    draw();
+  } catch (err) { msg(err.message); }
+}
+
+async function addTarget(lon, lat, h = +$('th').value) {
+  const [gl] = await terrainHeights([[lon, lat]]);
+  targets.push({ lon, lat, h, gl });
+  $('tn').textContent = targets.length;
+  draw();
+}
+$('namsan').onclick = () => addTarget(126.98823, 37.55117, 236);
+$('clearT').onclick = () => { targets = []; $('tn').textContent = 0; draw(); };
+$('nf').oninput = $('fh').oninput = $('real').onchange = draw;
+
+// ---------------------------------------------------------------- 분석
+$('run').onclick = async () => {
+  if (!site) return msg('신축 부지 건물을 먼저 선택하세요');
+  if (!targets.length) return msg('조망대상을 찍으세요');
+  try {
+    const rad = +$('rad').value, bb = around(center(data[site].geometry), rad + 100);
+    for (const t of targets) bb.splice(0, 4, Math.min(bb[0], t.lon), Math.min(bb[1], t.lat), Math.max(bb[2], t.lon), Math.max(bb[3], t.lat));
+    msg('건물·지형 불러오는 중…');
+    const ids = await loadBuildings(bb);
+    await sampleGL(ids);
+    msg('분석 중… (범위가 넓으면 수십 초)');
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ bbox: bb, site_id: site, new_height: +$('nf').value * fh(), floor_h: fh(), radius: rad, targets,
+                             gl: Object.fromEntries(ids.map(i => [i, glCache[i]])) }),
+    }).then(r => r.json());
+    if (r.error) return msg(r.error);
+    msg('');
+    results = Object.fromEntries(r.results.map(x => [x.id, x]));
+    $('real').checked = false;  // 분석 결과는 단순 매스로 보는 게 명확
+    draw();
+    setMode('view');
+    list(r.results);
+  } catch (err) { msg(err.message); }
+};
+
+function list(res) {
+  $('out').innerHTML = '<h4>조망 감소 순위</h4>';
+  const hit = res.filter(x => x.max_drop > 0);
+  if (!hit.length) $('out').innerHTML += '<div>조망 감소가 있는 건물이 없습니다.</div>';
+  for (const x of hit) {
+    const d = document.createElement('div');
+    d.className = 'row';
+    d.textContent = `${x.name || x.id} — 최대 −${x.max_drop}%p`;
+    d.onclick = () => {
+      const [lon, lat] = center(data[x.id].geometry);
+      viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat - 0.0025, glCache[x.id] + 250),
+                            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-35) } });
+      table(x.id);
+    };
+    $('out').appendChild(d);
+  }
+}
+
+function table(id) {
+  const r = results[id];
+  const rows = r.floors.slice().reverse().map(f =>
+    `<tr><td>${f.floor}F</td><td>${f.before}%</td><td>${f.after}%</td><td>${f.change > 0 ? '+' : ''}${f.change}%p</td></tr>`).join('');
+  $('detail').innerHTML = `<h4>${r.name || r.id}</h4>GL ${r.gl}m · 최대 감소 ${r.max_drop}%p
+    <table><tr><th>층</th><th>기존</th><th>신축 후</th><th>변화</th></tr>${rows}</table>`;
+}
+
+// ---------------------------------------------------------------- 브이월드 3D 시작
+vw.ws3dInitCallBack = () => {
+  viewer = ws3d.viewer;
+  viewer.scene.globe.depthTestAgainstTerrain = true;  // 지형·건물 위 클릭 좌표 정확히
+  layer = new Cesium.CustomDataSource('uvi');
+  viewer.dataSources.add(layer);
+  new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+    .setInputAction(onClick, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  viewer.camera.moveEnd.addEventListener(() => {
+    const k = viewer.camera.positionCartographic;
+    const ll = [Cesium.Math.toDegrees(k.longitude), Cesium.Math.toDegrees(k.latitude)];
+    if (!inSeoul(ll) || k.height > 30000)
+      viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(126.978, 37.50, 12000),
+                            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-50) } });
+  });
+};
+if (!location.protocol.startsWith('http') || typeof vw === 'undefined') {
+  $('map').innerHTML = `<div style="padding:40px;line-height:1.8">
+    <h3>서버로 실행해야 합니다</h3>
+    브이월드 3D 지도는 인증키가 필요해서, 이 파일을 직접 열면 동작하지 않습니다.<br>
+    1. 브이월드에서 인증키 발급 (서비스 URL: <b>localhost</b>)<br>
+    2. 터미널: <code>$env:VWORLD_KEY="발급키"; python viewimpact.py serve</code><br>
+    3. 브라우저: <b>http://localhost:8000</b></div>`;
+  throw new Error('브이월드 스크립트 없음');
+}
+const map = new vw.Map();
+map.setOption({
+  mapId: 'map',
+  initPosition: new vw.CameraPosition(new vw.CoordZ(127.0010, 37.5285, 600), new vw.Direction(0, -30, 0)),  // 한남동
+  logo: true,
+  navigation: true,
+});
+map.start();
+</script>
+</body>
+</html>
