@@ -63,7 +63,7 @@ const fh = () => +$('fh').value;
 const SEOUL = [126.76, 37.41, 127.19, 37.72];  // 분석 범위: 서울 (경도·위도 min/max)
 const inSeoul = ([x, y]) => x >= SEOUL[0] && x <= SEOUL[2] && y >= SEOUL[1] && y <= SEOUL[3];
 const data = {}, glCache = {};   // id -> 건물, id -> 지반고
-let viewer, layer, site = null, siteFeature = null, targets = [], results = {};
+let viewer, layer, site = null, targets = [], results = {};
 
 // ---------------------------------------------------------------- 기하 유틸
 const rings = g => g.type === 'Polygon' ? [g.coordinates[0]] : g.coordinates.map(p => p[0]);
@@ -125,21 +125,20 @@ function prism(g, base, top, col, id) {
       properties: { bid: id },
     });
 }
+// 브이월드 3D 건물 레이어(facility_build*) 켜기/끄기. 끌 때 켜져 있던 것만 기억해 되살림
+let realOn = null;
 function setReal(show) {
-  const walk = c => {
-    for (let i = 0; i < c.length; i++) {
-      const p = c.get(i);
-      if (p instanceof Cesium.Cesium3DTileset) p.show = show;
-      else if (p && p.length !== undefined && p.get) walk(p);
-    }
-  };
-  walk(viewer.scene.primitives);
+  const m = viewer.map;
+  if (!show && !realOn)
+    realOn = m.getElementIdArray().filter(i => i.startsWith('facility_build') && m.getElementById(i).visible);
+  if (!realOn) return;
+  for (const i of realOn) show ? m.getElementById(i).show() : m.getElementById(i).hide();
+  if (show) realOn = null;
 }
 function draw() {
   if (!viewer) return;
   const real = $('real').checked;
   setReal(real);
-  if (siteFeature) siteFeature.show = false;  // 실사 모드에서도 부지 기존 건물은 숨김
   layer.entities.removeAll();
   const grey = Cesium.Color.fromCssColorString('#bdbdbd').withAlpha(.95);
   for (const b of Object.values(data)) {
@@ -191,8 +190,6 @@ async function onClick(e) {
       if (!id || d(id) > 15) return msg('건물 외곽선을 찾지 못했습니다');
     }
     await sampleGL(ids);
-    if (siteFeature) siteFeature.show = true;
-    siteFeature = picked instanceof Cesium.Cesium3DTileFeature ? picked : null;
     site = id;
     results = {};
     $('out').innerHTML = $('detail').innerHTML = '';
