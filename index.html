@@ -33,9 +33,10 @@
     <label><input type="radio" name="mode" value="target"> 조망대상 점 찍기</label>
     <label><input type="radio" name="mode" value="view"> 결과 보기 (층별 표)</label>
     <label>대상 높이(지반 위, m) <input id="th" type="number" value="0"></label>
+    <label><input type="checkbox" id="line" checked> 직전 점과 선으로 이어 20m 간격으로 채우기 (한강 등)</label>
     <button id="namsan">남산타워 추가</button>
     <button id="clearT">대상 지우기</button>
-    <div>조망대상 <b id="tn">0</b>개 (한강은 수면을 따라 여러 점)</div>
+    <div>조망대상 <b id="tn">0</b>개 (한강은 강을 따라 2~3번 클릭)</div>
   </fieldset>
 
   <label>신축 부지: <b id="siteName">-</b></label>
@@ -199,19 +200,24 @@ async function onClick(e) {
   } catch (err) { msg(err.message); }
 }
 
-async function addTarget(lon, lat, h = +$('th').value) {
+async function addTarget(lon, lat, h = +$('th').value, line = $('line').checked) {
   if (site) {  // 비스듬한 화면에서 먼 곳이 찍히는 실수 방지 + 건물 조회 범위 제한
     const [x, y] = center(data[site].geometry);
     const d = Math.hypot((lon - x) * 111320 * Math.cos(y * Math.PI / 180), (lat - y) * 110574);
     if (d > 3000) return msg(`부지에서 ${(d / 1000).toFixed(1)}km 떨어진 점입니다. 3km 이내만 찍을 수 있어요`);
   }
   msg('');
-  const [gl] = await terrainHeights([[lon, lat]]);
-  targets.push({ lon, lat, h, gl });
+  const pts = [[lon, lat]], prev = targets[targets.length - 1];
+  if (line && prev) {  // 직전 점과의 사이를 20m 간격으로 채움 (점 몇 개로는 시선이 부지를 잘 안 지남)
+    const n = Math.floor(Math.hypot((lon - prev.lon) * 88000, (lat - prev.lat) * 110574) / 20);
+    for (let i = 1; i < n; i++) pts.unshift([prev.lon + (lon - prev.lon) * i / n, prev.lat + (lat - prev.lat) * i / n]);
+  }
+  const gls = await terrainHeights(pts);
+  pts.forEach(([x, y], i) => targets.push({ lon: x, lat: y, h, gl: gls[i] }));
   $('tn').textContent = targets.length;
   draw();
 }
-$('namsan').onclick = () => addTarget(126.98823, 37.55117, 236);
+$('namsan').onclick = () => addTarget(126.98823, 37.55117, 236, false);
 $('clearT').onclick = () => { targets = []; $('tn').textContent = 0; draw(); };
 $('nf').oninput = $('fh').oninput = $('real').onchange = draw;
 
