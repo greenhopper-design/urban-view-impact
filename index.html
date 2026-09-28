@@ -53,6 +53,8 @@
 </div>
 
 <script>
+// 전역을 오염시키지 않도록 감쌈: 브이월드 내부가 jQuery 의 $ 를 쓴다
+(() => {
 const $ = id => document.getElementById(id);
 const mode = () => document.querySelector('[name=mode]:checked').value;
 const setMode = m => { document.querySelector(`[name=mode][value=${m}]`).checked = true; };
@@ -295,6 +297,7 @@ map.setOption({
   navigation: true,
 });
 map.start();
+})();
 </script>
 </body>
 </html>
