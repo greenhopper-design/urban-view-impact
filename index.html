@@ -439,7 +439,7 @@ async function onClick(e) {
       id = ids.sort((a, b) => d(a) - d(b))[0];
       if (!id || d(id) > 15) return flash('건물을 찾지 못했어요. 건물 지붕을 클릭해 보세요');
     }
-    await sampleGL(ids);
+    await sampleGL([id]);  // 주변 건물 지반고는 분석 실행 때 한꺼번에
     site = id;
     clearResults();
     $('siteCard').hidden = false;
