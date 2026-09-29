@@ -104,6 +104,33 @@ def _fetch_tile(i, j):
         page += 1
 
 
+SEARCH = "https://api.vworld.kr/req/search"
+
+
+def search(q):
+    """브이월드 검색 API 2.0: 장소 -> 행정동 -> 도로명주소 순으로 찾아 서울 안 결과만 최대 10개."""
+    out = []
+    for typ, cat in (("place", None), ("district", "L4"), ("address", "road")):
+        params = dict(service="search", request="search", version="2.0", crs="EPSG:4326", size=10, page=1,
+                      query=q, type=typ, format="json", errorformat="json", key=os.environ["VWORLD_KEY"],
+                      domain=os.environ.get("VWORLD_DOMAIN", "localhost"))
+        if cat:
+            params["category"] = cat
+        r = requests.get(SEARCH, params=params, timeout=15).json()["response"]
+        if r["status"] == "ERROR":
+            raise RuntimeError("브이월드 검색 오류: %s" % r.get("error", {}).get("text", r))
+        for it in (r.get("result") or {}).get("items", []):
+            lon, lat = float(it["point"]["x"]), float(it["point"]["y"])
+            if not (SEOUL[0] <= lon <= SEOUL[2] and SEOUL[1] <= lat <= SEOUL[3]):
+                continue
+            addr = it.get("address") or {}
+            out.append({"title": it.get("title") or addr.get("road") or "",
+                        "sub": addr.get("road") or addr.get("parcel") or "", "lon": lon, "lat": lat})
+        if len(out) >= 10:
+            break
+    return out[:10]
+
+
 class Ground:
     """DEM에서 지반고 조회. DEM이 없으면 0 (평지 가정)."""
 
@@ -154,7 +181,8 @@ def analyze(buildings, site_id, new_height, targets, floor_h=3.0, radius=300, gr
     buildings: [{id, name, floors, geometry(GeoJSON, 경위도)}]
     targets:   [{lon, lat, h, gl?}]  h = 대상 지반 위 높이 (한강 0, 남산타워 236 등)
     gl:        {건물id: 지반고} 브라우저가 브이월드 지형에서 뽑은 값. 없으면 DEM/0
-    반환: 반경 내 주변 건물별 층별 조망률(%) 신축 전/후, 최대 감소폭 순 정렬
+    반환: {"results": 반경 내 주변 건물별 층별 조망률(%) 신축 전/후 (최대 감소폭 순),
+           "site": 신축 건물 자체의 층별 조망률}
     """
     if not targets:
         raise ValueError("조망대상을 하나 이상 지정하세요")
@@ -178,14 +206,11 @@ def analyze(buildings, site_id, new_height, targets, floor_h=3.0, radius=300, gr
     tree = STRtree(polys)
     site = polys[s]
 
-    results = []
-    for i, poly in enumerate(polys):
-        if i == s or poly.distance(site) > radius:
-            continue
-        # (관찰건물, 대상)별 가림 요소는 층과 무관 -> 한 번만 계산
-        rays = []
+    def rays(i):
+        """관찰건물 i -> 각 대상 시선의 (대상높이, 거리, 부지 외 가림요소, 부지 통과구간). 층과 무관해 한 번만 계산."""
+        out = []
         for txy, zt in T:
-            p = np.array(nearest_points(poly.boundary, Point(txy))[0].coords[0])
+            p = np.array(nearest_points(polys[i].boundary, Point(txy))[0].coords[0])
             u = txy - p
             D = float(np.hypot(*u))
             if D < 1:
@@ -202,26 +227,37 @@ def analyze(buildings, site_id, new_height, targets, floor_h=3.0, radius=300, gr
                 if len(ds):
                     zs = ground.at(L.lonlat(p + np.outer(ds / D, u)))
                     others += list(zip(ds, zs))
-            sp = _span(seg, site, p)
-            rays.append((zt, D, others, sp or ()))
+            sp = () if i == s else _span(seg, site, p) or ()
+            out.append((zt, D, others, sp))
+        return out
 
-        rows = []
+    n = len(T)
+    pct = lambda k: round(100 * k / n, 1)  # noqa: E731
+
+    results = []
+    for i, poly in enumerate(polys):
+        if i == s or poly.distance(site) > radius:
+            continue
+        rs, rows = rays(i), []
         for f in range(1, floors[i] + 1):
             zp = gl[i] + (f - 1) * floor_h + EYE
             before = after = 0
-            for zt, D, others, sp in rays:
+            for zt, D, others, sp in rs:
                 if _blocked(zp, zt, D, others):
                     continue
                 before += not _blocked(zp, zt, D, [(d, old_site) for d in sp])
                 after += not _blocked(zp, zt, D, [(d, new_site) for d in sp])
-            n = len(T)
-            rows.append({"floor": f, "before": round(100 * before / n, 1),
-                         "after": round(100 * after / n, 1),
-                         "change": round(100 * (after - before) / n, 1)})
+            rows.append({"floor": f, "before": pct(before), "after": pct(after), "change": pct(after - before)})
         results.append({"id": ids[i], "name": buildings[i]["name"], "gl": round(gl[i], 1),
                         "max_drop": -min(r["change"] for r in rows), "floors": rows})
     results.sort(key=lambda r: -r["max_drop"])
-    return results
+
+    # 신축 건물 자체의 층별 조망률 (주변 건물은 현 상태)
+    rs = rays(s)
+    site_rows = [{"floor": f, "view": pct(sum(not _blocked(gl[s] + (f - 1) * floor_h + EYE, zt, D, o)
+                                              for zt, D, o, _ in rs))}
+                 for f in range(1, max(1, round(new_height / floor_h)) + 1)]
+    return {"results": results, "site": {"id": site_id, "gl": round(gl[s], 1), "floors": site_rows}}
 
 
 # ---------------------------------------------------------------- 서버
@@ -245,6 +281,8 @@ class Handler(BaseHTTPRequestHandler):
                 html = html.replace("{{VWORLD_KEY}}", os.environ["VWORLD_KEY"]).replace(
                     "{{VWORLD_DOMAIN}}", os.environ.get("VWORLD_DOMAIN", "localhost"))
                 return self._send(200, html.encode(), "text/html; charset=utf-8")
+            if u.path == "/api/search":
+                return self._send(200, {"items": search(parse_qs(u.query)["q"][0])})
             if u.path == "/api/buildings":
                 bbox = tuple(map(float, parse_qs(u.query)["bbox"][0].split(",")))
                 return self._send(200, {"buildings": fetch_buildings(bbox), "dem": self.ground.ds is not None})
@@ -257,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
             q = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             res = analyze(fetch_buildings(q["bbox"]), q["site_id"], float(q["new_height"]), q["targets"],
                           float(q["floor_h"]), float(q["radius"]), self.ground, q.get("gl"))
-            self._send(200, {"results": res})
+            self._send(200, res)
         except Exception as e:
             self._send(400, {"error": str(e)})
 
@@ -284,13 +322,15 @@ def demo():
           {"id": "S", "name": "부지", "floors": 2, "geometry": box(0, 50, 20, 60)}]
     t = [{"lon": lon0 + 10 / kx, "lat": lat0 + 300 / ky, "h": 0}]
 
-    r = analyze(bs, "S", 60, t)[0]["floors"]  # 2층(6m) -> 60m
+    r = analyze(bs, "S", 60, t)["results"][0]["floors"]  # 2층(6m) -> 60m
     assert r[0]["before"] == 0, r[0]           # 1층: 기존 2층 건물에도 이미 가림
     assert r[9]["before"] == 100, r[9]         # 10층: 기존엔 보임
     assert r[9]["after"] == 0, r[9]            # 10층: 신축 60m 후 가림
-    assert analyze(bs, "S", 6, t)[0]["max_drop"] == 0  # 높이 그대로면 변화 없음
-    hill = analyze(bs, "S", 60, t, gl={"A": 60, "S": 0})[0]["floors"]
+    assert analyze(bs, "S", 6, t)["results"][0]["max_drop"] == 0  # 높이 그대로면 변화 없음
+    hill = analyze(bs, "S", 60, t, gl={"A": 60, "S": 0})["results"][0]["floors"]
     assert hill[9]["after"] == 100, hill[9]    # 관찰동이 60m 언덕 위면 신축 60m 넘어 보임
+    sv = analyze(bs, "S", 60, t)["site"]["floors"]
+    assert len(sv) == 20 and all(x["view"] == 100 for x in sv), sv  # 신축 20층: 앞이 트여 전 층 조망
     for row in r:
         print("%2dF  기존 %5.1f%%  신축후 %5.1f%%  변화 %+.1f%%p" % (row["floor"], row["before"], row["after"], row["change"]))
     print("demo OK")
