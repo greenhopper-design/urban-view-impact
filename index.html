@@ -4,74 +4,282 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Urban View Impact</title>
-<!-- 브이월드 WebGL 3D 3.0 (Cesium 기반). 키는 서버가 주입 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<!-- 브이월드 WebGL 3D 3.0 (Cesium 기반). 키는 서버/빌드가 주입 -->
 <script src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey={{VWORLD_KEY}}"></script>
 <style>
-  body { margin: 0; display: flex; height: 100vh; font: 14px system-ui, sans-serif; background: #fff; color: #222; }
-  #map { flex: 1; position: relative; }
-  #side { width: 340px; padding: 12px 14px; overflow: auto; box-sizing: border-box; border-left: 1px solid #ddd; }
-  h3 { margin: 0 0 8px; }
-  fieldset { border: 1px solid #ddd; margin: 8px 0; }
-  label { display: block; margin: 5px 0; }
-  input[type=number] { width: 70px; }
-  button { margin: 3px 0; cursor: pointer; }
-  #msg { color: #b33; display: block; margin: 6px 0; }
-  table { border-collapse: collapse; font-size: 12px; }
-  td, th { padding: 2px 6px; text-align: right; border-bottom: 1px solid #eee; }
-  .row { cursor: pointer; padding: 3px 0; border-bottom: 1px solid #eee; }
-  .row:hover { background: #f4f4f4; }
-  .legend span { display: inline-block; width: 14px; height: 10px; margin: 0 3px 0 8px; }
-  @media (max-width: 700px) { body { flex-direction: column; } #side { width: auto; height: 45vh; border: 0; } }
+  :root {
+    --bg: #f4f5f7; --card: #fff; --ink: #1b1d21; --sub: #6b7280; --line: #e5e7eb;
+    --accent: #0696d7; --accent-ink: #fff; --accent-soft: #e6f4fb; --warn: #d9480f;
+    --r: 10px; --shadow: 0 4px 18px rgba(15, 23, 42, .14);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.45 Pretendard, system-ui, sans-serif; color: var(--ink); background: var(--bg); overflow: hidden; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  #map { position: fixed; inset: 0; }
+  .card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); }
+
+  /* 상단: 브랜드 + 검색 */
+  .topbar { position: fixed; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px; z-index: 5; width: min(460px, calc(100vw - 32px)); }
+  .brand { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-block; position: relative; }
+  .brand i::after { content: ''; position: absolute; left: 5px; bottom: 5px; width: 4px; height: 8px; background: #fff; box-shadow: 6px -4px 0 #fff; }
+  .search { position: relative; flex: 1; min-width: 0; }
+  .search input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); outline: none; }
+  .search input:focus { border-color: var(--accent); background: #fff; }
+  .hits { position: absolute; top: calc(100% + 8px); left: 0; right: 0; max-height: 320px; overflow: auto; }
+  .hits:empty { display: none; }
+  .hits div { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .hits div:hover { background: var(--accent-soft); }
+  .hits small { color: var(--sub); display: block; }
+  .icon-btn { width: 34px; height: 34px; border: 0; border-radius: 8px; background: var(--bg); font-weight: 700; flex: none; }
+  .icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
+
+  /* 지금 할 일 안내 */
+  .hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 4; padding: 9px 16px; background: var(--ink); color: #fff; border-radius: 999px; font-weight: 600; box-shadow: var(--shadow); pointer-events: none; white-space: nowrap; }
+  .hint:empty { display: none; }
+  @media (max-width: 1100px) { .hint { top: 72px; } }
+
+  /* 오른쪽 패널 */
+  .panel { position: fixed; top: 16px; right: 16px; bottom: 56px; width: 360px; z-index: 5; display: flex; flex-direction: column; overflow: hidden; }
+  .panel-scroll { overflow: auto; flex: 1; }
+  .step { border-bottom: 1px solid var(--line); }
+  .step-h { width: 100%; display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 0; background: none; text-align: left; }
+  .num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--bg); color: var(--sub); flex: none; }
+  .step.done .num { background: var(--accent-soft); color: var(--accent); }
+  .step.open .num { background: var(--accent); color: var(--accent-ink); }
+  .step-h b { display: block; }
+  .step-h small { color: var(--sub); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 270px; }
+  .step-b { display: none; padding: 0 16px 16px 54px; }
+  .step.open .step-b { display: block; }
+  .guide { margin: 0 0 12px; color: var(--sub); }
+  .fields { display: flex; gap: 10px; margin-bottom: 10px; }
+  .field { flex: 1; }
+  .field span { display: block; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+  .field input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  .field input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .pill { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--bg); font-size: 13px; }
+  .site-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .site-card b { display: block; }
+  .site-card small { color: var(--sub); }
+  .row-btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 12px; font-weight: 600; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { width: 100%; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); padding: 11px; font-size: 15px; }
+  .btn.primary:hover { filter: brightness(1.07); color: var(--accent-ink); }
+  .btn.primary:disabled { opacity: .5; cursor: default; filter: none; }
+  .btn.ghost { border-color: transparent; background: var(--bg); }
+  .check { display: flex; gap: 8px; align-items: center; color: var(--sub); font-size: 13px; }
+  .range { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; }
+  .range input { flex: 1; accent-color: var(--accent); }
+  .msg { color: var(--warn); font-weight: 600; margin-top: 8px; }
+  .msg:empty { display: none; }
+  .msg.busy { color: var(--sub); font-weight: 500; }
+
+  /* 결과 */
+  .res { padding: 16px; }
+  .res[hidden] { display: none; }
+  .res h3 { margin: 0 0 12px; font-size: 15px; }
+  .res h4 { margin: 18px 0 8px; font-size: 13px; color: var(--sub); font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+  .kpi small { color: var(--sub); display: block; font-size: 12px; }
+  .kpi b { font-size: 20px; }
+  .kpi.hot b { color: var(--warn); }
+  .seg { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; margin: 14px 0 8px; }
+  .seg button { flex: 1; border: 0; background: none; padding: 7px 4px; border-radius: 6px; font-weight: 600; color: var(--sub); }
+  .seg button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .legend-bar { height: 10px; border-radius: 5px; }
+  .legend-ticks { display: flex; justify-content: space-between; font-size: 12px; color: var(--sub); margin-top: 4px; }
+  .rank { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; align-items: center; }
+  .rank:hover, .rank.sel { background: var(--accent-soft); }
+  .rank span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank b { color: var(--warn); font-size: 13px; }
+  .rank i { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #fd8d3c, #bd0026); }
+  .empty { color: var(--sub); padding: 6px 0; }
+  .detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-top: 12px; }
+  .detail:empty { display: none; }
+  .detail header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; gap: 8px; }
+  .detail header small { color: var(--sub); }
+  .floors { max-height: 260px; overflow: auto; }
+  .fl { display: grid; grid-template-columns: 34px 1fr 58px; gap: 8px; align-items: center; font-size: 12px; padding: 2px 0; }
+  .fl .track { position: relative; height: 10px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+  .fl .b0 { position: absolute; inset: 0 auto 0 0; background: #c6dbef; }
+  .fl .b1 { position: absolute; inset: 2px auto 2px 0; background: #08519c; border-radius: 2px; }
+  .fl em { font-style: normal; text-align: right; color: var(--sub); }
+  .fl em.down { color: var(--warn); font-weight: 700; }
+  .key { display: flex; gap: 12px; font-size: 12px; color: var(--sub); margin-top: 8px; }
+  .key span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; background: var(--c); }
+
+  /* 왼쪽 아래 도구 */
+  .tools { position: fixed; left: 16px; bottom: 56px; z-index: 5; display: flex; gap: 4px; padding: 6px; }
+  .toggle { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; font-weight: 600; cursor: pointer; user-select: none; }
+  .toggle input { appearance: none; width: 32px; height: 18px; border-radius: 9px; background: #cbd5e1; position: relative; margin: 0; cursor: pointer; transition: background .15s; }
+  .toggle input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .toggle input:checked { background: var(--accent); }
+  .toggle input:checked::after { transform: translateX(14px); }
+
+  /* 사용법 */
+  dialog { border: 0; border-radius: 14px; padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  dialog::backdrop { background: rgba(15, 23, 42, .45); }
+  .dlg { padding: 24px; }
+  .dlg h2 { margin: 0 0 4px; font-size: 20px; }
+  .dlg > p { margin: 0 0 18px; color: var(--sub); }
+  .how { display: grid; gap: 12px; margin-bottom: 18px; }
+  .how div { display: grid; grid-template-columns: 26px 1fr; gap: 12px; }
+  .how .num { background: var(--accent); color: #fff; }
+  .how p { margin: 2px 0 0; color: var(--sub); }
+  .ctrl { background: var(--bg); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--sub); margin-bottom: 18px; }
+
+  .gate { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 10; padding: 24px; }
+
+  @media (max-width: 760px) {
+    .panel { top: auto; left: 8px; right: 8px; bottom: 44px; width: auto; max-height: 48vh; }
+    .topbar { top: 8px; left: 8px; width: calc(100vw - 16px); }
+    .brand span { display: none; }
+    .hint { top: 64px; font-size: 13px; white-space: normal; text-align: center; width: max-content; max-width: calc(100vw - 32px); }
+    .tools { left: 8px; top: 64px; bottom: auto; }
+    .step-b { padding-left: 16px; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div id="side">
-  <h3>Urban View Impact</h3>
-  <div style="display:flex;gap:4px"><input id="q" placeholder="지역·장소 검색 (예: 한남동, 오산고)" style="flex:1;min-width:0"><button id="search">검색</button></div>
-  <div id="hits"></div>
-  <fieldset><legend>클릭 모드</legend>
-    <label><input type="radio" name="mode" value="site" checked> 신축 부지(건물) 선택</label>
-    <label><input type="radio" name="mode" value="target"> 조망대상 점 찍기</label>
-    <label><input type="radio" name="mode" value="view"> 결과 보기 (층별 표)</label>
-    <label>대상 높이(지반 위, m) <input id="th" type="number" value="0"></label>
-    <label><input type="checkbox" id="line" checked> 직전 점과 선으로 이어 20m 간격으로 채우기 (한강 등)</label>
-    <button id="namsan">남산타워 추가</button>
-    <button id="clearT">대상 지우기</button>
-    <div>조망대상 <b id="tn">0</b>개 (한강은 강을 따라 2~3번 클릭)</div>
-  </fieldset>
 
-  <label>신축 부지: <b id="siteName">-</b></label>
-  <label>신축 층수 <input id="nf" type="number" value="30"></label>
-  <label>층고(m) <input id="fh" type="number" value="3.0" step="0.1"></label>
-  <label>분석 반경(m) <input id="rad" type="number" value="300"></label>
-  <label><input type="checkbox" id="real" checked> 브이월드 실사 건물 표시</label>
-  <button id="run">분석</button>
-  <span id="msg"></span>
-  <label>색 기준 <select id="basis">
-    <option value="drop">조망 감소 (신축 전→후)</option>
-    <option value="before">현재 조망률 (신축 전)</option>
-    <option value="after">신축 후 조망률</option>
-  </select></label>
-  <div class="legend" id="legend"></div>
-  <div id="summary"></div>
-  <div id="siteView"></div>
-  <div id="detail"></div>
-  <div id="out"></div>
+<header class="card topbar">
+  <div class="brand"><i></i><span>Urban View Impact</span></div>
+  <div class="search">
+    <input id="q" placeholder="서울 지역·장소 검색 (예: 여의도, 한남동)" autocomplete="off">
+    <div id="hits" class="card hits"></div>
+  </div>
+  <button id="helpBtn" class="icon-btn" aria-label="사용법">?</button>
+</header>
+
+<div id="hint" class="hint"></div>
+
+<aside class="card panel">
+  <div class="panel-scroll">
+    <section class="step open" data-step="1">
+      <button class="step-h"><span class="num">1</span><div><b>신축 부지</b><small id="s1">지도에서 건물을 클릭</small></div></button>
+      <div class="step-b">
+        <p class="guide">새로 지을 자리에 있는 건물을 지도에서 클릭하세요.</p>
+        <div id="siteCard" class="site-card" hidden></div>
+        <div class="fields">
+          <label class="field"><span>신축 층수</span><input id="nf" type="number" value="30" min="1" max="120"></label>
+          <label class="field"><span>층고 (m)</span><input id="fh" type="number" value="3.0" min="2" max="8" step="0.1"></label>
+        </div>
+        <span class="pill">신축 높이 <b id="hm">90m</b></span>
+        <div class="row-btns"><button class="btn" data-go="2">다음 →</button></div>
+      </div>
+    </section>
+
+    <section class="step" data-step="2">
+      <button class="step-h"><span class="num">2</span><div><b>조망 대상</b><small id="s2">한강·남산 등 바라볼 대상</small></div></button>
+      <div class="step-b">
+        <p class="guide">한강을 따라 지도를 <b>2~3번 클릭</b>하세요. 점 사이는 20m 간격으로 자동으로 채워집니다.</p>
+        <div class="row-btns">
+          <button id="namsan" class="btn ghost">＋ 남산타워</button>
+          <button id="clearT" class="btn ghost">지우기</button>
+        </div>
+        <label class="check"><input type="checkbox" id="line" checked> 점 사이 자동으로 채우기</label>
+        <div class="row-btns"><button class="btn" data-go="3">다음 →</button></div>
+      </div>
+    </section>
+
+    <section class="step" data-step="3">
+      <button class="step-h"><span class="num">3</span><div><b>분석</b><small id="s3">주변 건물의 층별 조망 비교</small></div></button>
+      <div class="step-b">
+        <span class="field"><span>분석 반경</span></span>
+        <div class="range"><input id="rad" type="range" min="100" max="500" step="50" value="300"><b id="radv">300m</b></div>
+        <button id="run" class="btn primary">조망 분석 실행</button>
+        <div id="msg" class="msg"></div>
+      </div>
+    </section>
+
+    <section id="res" class="res" hidden>
+      <h3>분석 결과</h3>
+      <div class="kpis">
+        <div class="kpi"><small>현재 조망 있는 건물</small><b id="k1">-</b></div>
+        <div class="kpi hot"><small>조망 줄어드는 건물</small><b id="k2">-</b></div>
+        <div class="kpi hot"><small>최대 감소</small><b id="k3">-</b></div>
+        <div class="kpi"><small>신축 건물 평균 조망</small><b id="k4">-</b></div>
+      </div>
+
+      <div class="seg" id="basis">
+        <button data-v="drop" class="on">조망 감소</button>
+        <button data-v="before">현재 조망</button>
+        <button data-v="after">신축 후</button>
+      </div>
+      <div id="legendBar" class="legend-bar"></div>
+      <div id="legendTicks" class="legend-ticks"></div>
+
+      <div id="detail" class="detail"></div>
+
+      <h4>조망이 줄어드는 건물</h4>
+      <div id="out"></div>
+
+      <h4>신축 건물 층별 조망</h4>
+      <div id="siteView"></div>
+    </section>
+  </div>
+</aside>
+
+<div class="card tools">
+  <label class="toggle"><input type="checkbox" id="real" checked> 실사 건물</label>
 </div>
+
+<dialog id="help">
+  <div class="dlg">
+    <h2>Urban View Impact</h2>
+    <p>새 건물이 주변 건물의 한강·남산 조망을 얼마나 가리는지 층별로 보여줍니다.</p>
+    <div class="how">
+      <div><span class="num">1</span><div><b>신축 부지 선택</b><p>검색으로 지역을 찾고, 새로 지을 자리의 건물을 클릭한 뒤 층수를 입력하세요.</p></div></div>
+      <div><span class="num">2</span><div><b>조망 대상 지정</b><p>한강을 따라 2~3번 클릭하세요. 남산은 버튼 하나로 추가됩니다.</p></div></div>
+      <div><span class="num">3</span><div><b>분석 실행</b><p>주변 건물이 층별로 칠해집니다. 빨간 층일수록 조망이 많이 줄어듭니다. 건물을 클릭하면 층별 그래프가 나옵니다.</p></div></div>
+    </div>
+    <div class="ctrl">지도 조작 — 이동: 왼쪽 드래그 · 회전/기울이기: 오른쪽 드래그 또는 Ctrl+드래그 · 확대: 휠</div>
+    <button id="helpClose" class="btn primary">시작하기</button>
+  </div>
+</dialog>
 
 <script>
 // 전역을 오염시키지 않도록 감쌈: 브이월드 내부가 jQuery 의 $ 를 쓴다
 (() => {
 const $ = id => document.getElementById(id);
-const mode = () => document.querySelector('[name=mode]:checked').value;
-const setMode = m => { document.querySelector(`[name=mode][value=${m}]`).checked = true; };
-const msg = t => { $('msg').textContent = t || ''; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const msg = (t, busy) => { $('msg').textContent = t || ''; $('msg').classList.toggle('busy', !!busy); };
 const fh = () => +$('fh').value;
 const SEOUL = [126.76, 37.41, 127.19, 37.72];  // 분석 범위: 서울 (경도·위도 min/max)
 const inSeoul = ([x, y]) => x >= SEOUL[0] && x <= SEOUL[2] && y >= SEOUL[1] && y <= SEOUL[3];
 const data = {}, glCache = {};   // id -> 건물, id -> 지반고
-let viewer, layer, site = null, targets = [], results = {}, siteRes = null;
+let viewer, layer, site = null, targets = [], results = {}, siteRes = null, step = 1, basis = 'drop', selected = null;
+const bname = id => (data[id] && data[id].name) || '이름 없는 건물';
+
+// ---------------------------------------------------------------- 단계 (펼친 단계 = 지도 클릭 동작)
+const HINTS = {
+  1: '새로 지을 자리의 건물을 클릭하세요',
+  2: '한강을 따라 2~3번 클릭하세요',
+  3: '‘조망 분석 실행’을 누르세요',
+  4: '건물을 클릭하면 층별 조망이 보여요',
+};
+function setStep(n) {
+  step = n;
+  document.querySelectorAll('.step').forEach(s => s.classList.toggle('open', +s.dataset.step === n));
+  $('hint').textContent = HINTS[n === 3 && Object.keys(results).length ? 4 : n];
+}
+document.querySelectorAll('.step-h').forEach(h => { h.onclick = () => setStep(+h.parentElement.dataset.step); });
+document.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => setStep(+b.dataset.go); });
+function refreshSteps() {
+  const s = document.querySelectorAll('.step');
+  s[0].classList.toggle('done', !!site);
+  s[1].classList.toggle('done', targets.length > 0);
+  s[2].classList.toggle('done', Object.keys(results).length > 0);
+  $('s1').textContent = site ? `${bname(site)} → ${$('nf').value}층` : '지도에서 건물을 클릭';
+  $('s2').textContent = targets.length ? `조망 대상 ${targets.length}개 지점` : '한강·남산 등 바라볼 대상';
+  $('hm').textContent = `${Math.round(+$('nf').value * fh())}m`;
+}
 
 // ---------------------------------------------------------------- 기하 유틸
 const rings = g => g.type === 'Polygon' ? [g.coordinates[0]] : g.coordinates.map(p => p[0]);
@@ -95,11 +303,37 @@ function around([lon, lat], m) {
   const dy = m / 110574, dx = m / (111320 * Math.cos(lat * Math.PI / 180));
   return [lon - dx, lat - dy, lon + dx, lat + dy];
 }
-function color(drop) {
-  if (drop <= 0) return Cesium.Color.fromCssColorString('#e0e0e0');
+
+// ---------------------------------------------------------------- 색
+const DROP = ['#e5e7eb', '#fd8d3c', '#bd0026'], VIEW = ['#cbd5e1', '#c6dbef', '#08519c'];
+function dropColor(drop) {
+  if (drop <= 0) return Cesium.Color.fromCssColorString(DROP[0]);
   const t = Math.min(drop / 50, 1);  // 0 -> 50%p
   return Cesium.Color.fromBytes(253 - 64 * t, 141 - 141 * t, 60 - 22 * t);
 }
+function viewColor(p) {  // 조망률 0 -> 100% : 회색 -> 파랑
+  if (p <= 0) return Cesium.Color.fromCssColorString(VIEW[0]);
+  const t = p / 100;
+  return Cesium.Color.fromBytes(198 - 190 * t, 219 - 138 * t, 239 - 83 * t);
+}
+const slabColor = f => basis === 'drop' ? dropColor(-f.change) : viewColor(f[basis]);
+const relevant = r => basis === 'drop' ? r.max_drop > 0 : r.floors.some(f => f[basis] > 0);
+function legend() {
+  const drop = basis === 'drop';
+  $('legendBar').style.background = drop
+    ? `linear-gradient(90deg, ${DROP[0]} 0 8%, ${DROP[1]} 30%, ${DROP[2]})`
+    : `linear-gradient(90deg, ${VIEW[0]} 0 8%, ${VIEW[1]} 10%, ${VIEW[2]})`;
+  $('legendTicks').innerHTML = drop ? '<span>변화 없음</span><span>−25%p</span><span>−50%p 이상</span>'
+                                    : '<span>안 보임</span><span>50%</span><span>100% 보임</span>';
+}
+document.querySelectorAll('#basis button').forEach(b => {
+  b.onclick = () => {
+    basis = b.dataset.v;
+    document.querySelectorAll('#basis button').forEach(x => x.classList.toggle('on', x === b));
+    legend(); draw();
+  };
+});
+legend();
 
 // ---------------------------------------------------------------- 데이터
 async function loadBuildings(bbox) {
@@ -108,7 +342,6 @@ async function loadBuildings(bbox) {
   for (const f of r.buildings) data[f.id] = f;
   return r.buildings.map(f => f.id);
 }
-
 // 브이월드 지형에서 지반고 추출 (타원체고 기준이지만 상대 비교라 무관)
 async function terrainHeights(lonlats) {
   const cartos = lonlats.map(([lon, lat]) => Cesium.Cartographic.fromDegrees(lon, lat));
@@ -143,25 +376,14 @@ function setReal(show) {
   for (const i of realOn) show ? m.getElementById(i).show() : m.getElementById(i).hide();
   if (show) realOn = null;
 }
-function viewColor(p) {  // 조망률 0 -> 100% : 회색 -> 파랑
-  if (p <= 0) return Cesium.Color.fromCssColorString('#bdbdbd');
-  const t = p / 100;
-  return Cesium.Color.fromBytes(198 - 190 * t, 219 - 138 * t, 239 - 83 * t);
-}
-const basis = () => $('basis').value;
-const slabColor = f => basis() === 'drop' ? color(-f.change) : viewColor(f[basis()]);
-const relevant = r => basis() === 'drop' ? r.max_drop > 0 : r.floors.some(f => f[basis()] > 0);
-function legend() {
-  $('legend').innerHTML = basis() === 'drop'
-    ? '층별 감소 <span style="background:#e0e0e0"></span>0 <span style="background:#fd8d3c"></span>~25%p <span style="background:#bd0026"></span>50%p+'
-    : '조망률 <span style="background:#bdbdbd"></span>0% <span style="background:#c6dbef"></span>1% <span style="background:#08519c"></span>100%';
-}
 function draw() {
+  refreshSteps();
   if (!viewer) return;
   const real = $('real').checked;
   setReal(real);
   layer.entities.removeAll();
-  const grey = Cesium.Color.fromCssColorString('#bdbdbd').withAlpha(.95);
+  const grey = Cesium.Color.fromCssColorString('#d1d5db').withAlpha(.95);
+  const sel = Cesium.Color.fromCssColorString('#0696d7');
   for (const b of Object.values(data)) {
     const gl = glCache[b.id], r = results[b.id];
     if (gl === undefined) continue;
@@ -170,7 +392,7 @@ function draw() {
         for (const f of siteRes.floors)
           prism(b.geometry, gl + (f.floor - 1) * fh(), gl + f.floor * fh() - 0.3, viewColor(f.view), b.id);
       else
-        prism(b.geometry, gl, gl + +$('nf').value * fh(), Cesium.Color.fromCssColorString('#3182bd').withAlpha(.9), b.id);
+        prism(b.geometry, gl, gl + +$('nf').value * fh(), sel.withAlpha(.9), b.id);
     } else if (r && (!real || relevant(r))) {
       for (const f of r.floors)  // 층별 슬래브
         prism(b.geometry, gl + (f.floor - 1) * fh(), gl + f.floor * fh() - 0.3, slabColor(f), b.id);
@@ -181,10 +403,12 @@ function draw() {
   for (const t of targets)
     layer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(t.lon, t.lat, t.gl + t.h + 1),
-      point: { pixelSize: 11, color: Cesium.Color.fromCssColorString('#006d2c'), outlineColor: Cesium.Color.WHITE,
+      point: { pixelSize: 9, color: Cesium.Color.fromCssColorString('#10b981'), outlineColor: Cesium.Color.WHITE,
                outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
     });
 }
+$('real').onchange = draw;
+$('nf').oninput = $('fh').oninput = draw;
 
 // ---------------------------------------------------------------- 클릭
 function pickLonLat(pos) {
@@ -197,42 +421,49 @@ function pickLonLat(pos) {
 async function onClick(e) {
   const ll = pickLonLat(e.position);
   if (!ll) return;
-  if (!inSeoul(ll)) return msg('서울 시내만 분석할 수 있습니다');
+  if (!inSeoul(ll)) return flash('서울 시내만 분석할 수 있어요');
   const picked = viewer.scene.pick(e.position);
   try {
-    if (mode() === 'target') return await addTarget(ll[0], ll[1]);
-    if (mode() === 'view') {
+    if (step === 2) return await addTarget(ll[0], ll[1]);
+    if (step === 3) {
       const id = picked && picked.id && picked.id.properties && picked.id.properties.bid.getValue();
-      return id && results[id] && table(id);
+      return id && results[id] && detail(id);
     }
     // 부지 선택: 클릭 지점을 포함하는 건물 외곽선 찾기
-    msg('건물 찾는 중…');
+    flash('건물 찾는 중…');
     const ids = await loadBuildings(around(ll, 300));
     // 외곽선이 겹치면(부속동 등) 눈에 보이는 가장 높은 건물
     let id = ids.filter(i => inside(ll, data[i].geometry)).sort((a, b) => data[b].floors - data[a].floors)[0];
     if (!id) {  // 벽면 클릭 등: 15m 이내 가장 가까운 건물
       const d = i => { const c = center(data[i].geometry); return Math.hypot((c[0] - ll[0]) * 88000, (c[1] - ll[1]) * 110574); };
       id = ids.sort((a, b) => d(a) - d(b))[0];
-      if (!id || d(id) > 15) return msg('건물 외곽선을 찾지 못했습니다');
+      if (!id || d(id) > 15) return flash('건물을 찾지 못했어요. 건물 지붕을 클릭해 보세요');
     }
     await sampleGL(ids);
     site = id;
-    results = {};
-    siteRes = null;
-    $('out').innerHTML = $('detail').innerHTML = $('summary').innerHTML = $('siteView').innerHTML = '';
-    $('siteName').textContent = `${data[id].name || id} (현재 ${data[id].floors}층, GL ${glCache[id].toFixed(1)}m)`;
-    msg('');
+    clearResults();
+    $('siteCard').hidden = false;
+    $('siteCard').innerHTML = `<b>${esc(bname(id))}</b><small>현재 ${data[id].floors}층 · 지반고 ${glCache[id].toFixed(1)}m</small>`;
+    flash('');
     draw();
-  } catch (err) { msg(err.message); }
+  } catch (err) { flash(err.message); }
 }
 
-async function addTarget(lon, lat, h = +$('th').value, line = $('line').checked) {
+// 안내 문구 자리를 잠깐 빌려 상태를 보여줌
+let flashT;
+function flash(t) {
+  clearTimeout(flashT);
+  if (!t) return setStep(step);
+  $('hint').textContent = t;
+  flashT = setTimeout(() => setStep(step), 2600);
+}
+
+async function addTarget(lon, lat, h = 0, line = $('line').checked) {
   if (site) {  // 비스듬한 화면에서 먼 곳이 찍히는 실수 방지 + 건물 조회 범위 제한
     const [x, y] = center(data[site].geometry);
     const d = Math.hypot((lon - x) * 111320 * Math.cos(y * Math.PI / 180), (lat - y) * 110574);
-    if (d > 3000) return msg(`부지에서 ${(d / 1000).toFixed(1)}km 떨어진 점입니다. 3km 이내만 찍을 수 있어요`);
+    if (d > 3000) return flash(`부지에서 ${(d / 1000).toFixed(1)}km 떨어진 곳이에요. 3km 이내만 가능해요`);
   }
-  msg('');
   const pts = [[lon, lat]], prev = targets[targets.length - 1];
   if (line && prev) {  // 직전 점과의 사이를 20m 간격으로 채움 (점 몇 개로는 시선이 부지를 잘 안 지남)
     const n = Math.floor(Math.hypot((lon - prev.lon) * 88000, (lat - prev.lat) * 110574) / 20);
@@ -240,51 +471,55 @@ async function addTarget(lon, lat, h = +$('th').value, line = $('line').checked)
   }
   const gls = await terrainHeights(pts);
   pts.forEach(([x, y], i) => targets.push({ lon: x, lat: y, h, gl: gls[i] }));
-  $('tn').textContent = targets.length;
+  clearResults();
   draw();
 }
 $('namsan').onclick = () => addTarget(126.98823, 37.55117, 236, false);
-$('clearT').onclick = () => { targets = []; $('tn').textContent = 0; draw(); };
-$('nf').oninput = $('fh').oninput = $('real').onchange = draw;
-$('basis').onchange = () => { legend(); draw(); };
-legend();
+$('clearT').onclick = () => { targets = []; clearResults(); draw(); };
+$('rad').oninput = () => { $('radv').textContent = `${$('rad').value}m`; };
 
 // ---------------------------------------------------------------- 지역 검색
 async function doSearch() {
   const q = $('q').value.trim();
   if (!q) return;
-  $('hits').textContent = '검색 중…';
+  $('hits').innerHTML = '<div class="empty" style="cursor:default">검색 중…</div>';
   try {
     const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json());
     if (r.error) throw new Error(r.error);
-    $('hits').innerHTML = r.items.length ? '' : '서울 안에서 찾지 못했습니다';
+    $('hits').innerHTML = r.items.length ? '' : '<div class="empty" style="cursor:default">서울 안에서 찾지 못했어요</div>';
     for (const it of r.items) {
       const d = document.createElement('div');
-      d.className = 'row';
-      d.textContent = it.sub && it.sub !== it.title ? `${it.title} · ${it.sub}` : it.title;
+      d.innerHTML = `${esc(it.title)}${it.sub && it.sub !== it.title ? `<small>${esc(it.sub)}</small>` : ''}`;
       d.onclick = () => {
         viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(it.lon, it.lat - 0.0045, 600),
                               orientation: { heading: 0, pitch: Cesium.Math.toRadians(-35) } });
         $('hits').innerHTML = '';
+        $('q').blur();
       };
       $('hits').appendChild(d);
     }
-  } catch (err) { $('hits').textContent = err.message; }
+  } catch (err) { $('hits').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
 }
-$('search').onclick = doSearch;
-$('q').onkeydown = e => { if (e.key === 'Enter') doSearch(); };
+$('q').onkeydown = e => { if (e.key === 'Enter') doSearch(); if (e.key === 'Escape') $('hits').innerHTML = ''; };
+document.addEventListener('click', e => { if (!e.target.closest('.search')) $('hits').innerHTML = ''; });
 
 // ---------------------------------------------------------------- 분석
+function clearResults() {
+  results = {}; siteRes = null; selected = null;
+  $('res').hidden = true;
+  $('detail').innerHTML = '';
+}
 $('run').onclick = async () => {
-  if (!site) return msg('신축 부지 건물을 먼저 선택하세요');
-  if (!targets.length) return msg('조망대상을 찍으세요');
+  if (!site) { setStep(1); return flash('먼저 신축 부지를 선택하세요'); }
+  if (!targets.length) { setStep(2); return flash('조망 대상을 먼저 찍어 주세요'); }
+  $('run').disabled = true;
   try {
     const rad = +$('rad').value, bb = around(center(data[site].geometry), rad + 100);
     for (const t of targets) bb.splice(0, 4, Math.min(bb[0], t.lon), Math.min(bb[1], t.lat), Math.max(bb[2], t.lon), Math.max(bb[3], t.lat));
-    msg('건물·지형 불러오는 중…');
+    msg('건물과 지형을 불러오는 중…', true);
     const ids = await loadBuildings(bb);
     await sampleGL(ids);
-    msg('분석 중… (범위가 넓으면 수십 초)');
+    msg('층별 조망을 계산하는 중…', true);
     const r = await fetch('/api/analyze', {
       method: 'POST',
       body: JSON.stringify({ bbox: bb, site_id: site, new_height: +$('nf').value * fh(), floor_h: fh(), radius: rad, targets,
@@ -294,50 +529,65 @@ $('run').onclick = async () => {
     msg('');
     results = Object.fromEntries(r.results.map(x => [x.id, x]));
     siteRes = r.site;
-    summary(r);
+    showResults(r);
     $('real').checked = false;  // 분석 결과는 단순 매스로 보는 게 명확
     draw();
-    setMode('view');
-    list(r.results);
+    setStep(3);
   } catch (err) { msg(err.message); }
+  finally { $('run').disabled = false; }
 };
 
-function summary(r) {
-  const R = r.results, seen = R.filter(x => x.floors.some(f => f.before > 0)).length;
+function showResults(r) {
+  const R = r.results, hit = R.filter(x => x.max_drop > 0);
+  const seen = R.filter(x => x.floors.some(f => f.before > 0)).length;
   const avg = Math.round(r.site.floors.reduce((a, f) => a + f.view, 0) / r.site.floors.length);
-  const top = r.site.floors[r.site.floors.length - 1], first = r.site.floors.find(f => f.view > 0);
-  $('summary').innerHTML = `<h4>현재 전망 상태</h4>
-    반경 안 건물 <b>${R.length}</b>개 중 조망대상이 보이는 건물 <b>${seen}</b>개,
-    신축으로 조망이 줄어드는 건물 <b>${R.filter(x => x.max_drop > 0).length}</b>개`;
-  $('siteView').innerHTML = `<h4>신축 건물 자체 조망</h4>
-    평균 조망률 <b>${avg}%</b> · 최상층 ${top.view}% · ${first ? `${first.floor}층부터 조망 시작` : '전 층 조망 없음'}
-    <details><summary>층별 표</summary><table><tr><th>층</th><th>조망률</th></tr>${r.site.floors.slice().reverse().map(f => `<tr><td>${f.floor}F</td><td>${f.view}%</td></tr>`).join('')}</table></details>`;
-}
-function list(res) {
-  $('out').innerHTML = '<h4>조망 감소 순위</h4>';
-  const hit = res.filter(x => x.max_drop > 0);
-  if (!hit.length) $('out').innerHTML += '<div>조망 감소가 있는 건물이 없습니다.</div>';
-  for (const x of hit) {
+  const max = hit.length ? hit[0].max_drop : 0;
+  $('k1').textContent = `${seen} / ${R.length}`;
+  $('k2').textContent = `${hit.length}개`;
+  $('k3').textContent = max ? `−${max}%p` : '없음';
+  $('k4').textContent = `${avg}%`;
+
+  $('out').innerHTML = hit.length ? '' : '<div class="empty">이 계획으로 조망이 줄어드는 건물은 없어요.</div>';
+  for (const x of hit.slice(0, 20)) {
     const d = document.createElement('div');
-    d.className = 'row';
-    d.textContent = `${x.name || x.id} — 최대 −${x.max_drop}%p`;
+    d.className = 'rank';
+    d.dataset.id = x.id;
+    d.innerHTML = `<span>${esc(x.name || '이름 없는 건물')}</span><b>−${x.max_drop}%p</b><i style="width:${Math.max(4, x.max_drop / max * 100)}%"></i>`;
     d.onclick = () => {
       const [lon, lat] = center(data[x.id].geometry);
       viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat - 0.0025, glCache[x.id] + 250),
                             orientation: { heading: 0, pitch: Cesium.Math.toRadians(-35) } });
-      table(x.id);
+      detail(x.id);
     };
     $('out').appendChild(d);
   }
+
+  const first = r.site.floors.find(f => f.view > 0);
+  $('siteView').innerHTML = `<p class="guide" style="margin:0 0 8px">${first ? `<b>${first.floor}층부터</b> 조망이 보이고, 최상층은 ${r.site.floors[r.site.floors.length - 1].view}%` : '모든 층에서 조망 대상이 보이지 않아요'}</p>
+    <div class="floors">${r.site.floors.slice().reverse().map(f =>
+      `<div class="fl"><span>${f.floor}F</span><div class="track"><div class="b1" style="width:${f.view}%;top:0;bottom:0"></div></div><em>${f.view}%</em></div>`).join('')}</div>`;
+  $('res').hidden = false;
+  $('detail').innerHTML = '';
+  if (hit.length) detail(hit[0].id);
 }
 
-function table(id) {
+// 선택 건물: 층별 신축 전(연한 막대) / 후(진한 막대) 조망률
+function detail(id) {
   const r = results[id];
-  const rows = r.floors.slice().reverse().map(f =>
-    `<tr><td>${f.floor}F</td><td>${f.before}%</td><td>${f.after}%</td><td>${f.change > 0 ? '+' : ''}${f.change}%p</td></tr>`).join('');
-  $('detail').innerHTML = `<h4>${r.name || r.id}</h4>GL ${r.gl}m · 최대 감소 ${r.max_drop}%p
-    <table><tr><th>층</th><th>기존</th><th>신축 후</th><th>변화</th></tr>${rows}</table>`;
+  selected = id;
+  document.querySelectorAll('.rank').forEach(d => d.classList.toggle('sel', d.dataset.id === id));
+  $('detail').innerHTML = `<header><b>${esc(r.name || '이름 없는 건물')}</b><small>${r.floors.length}층 · 지반고 ${r.gl}m</small></header>
+    <div class="floors">${r.floors.slice().reverse().map(f =>
+      `<div class="fl"><span>${f.floor}F</span><div class="track"><div class="b0" style="width:${f.before}%"></div><div class="b1" style="width:${f.after}%"></div></div>
+       <em class="${f.change < 0 ? 'down' : ''}">${f.change < 0 ? `${f.change}%p` : `${f.after}%`}</em></div>`).join('')}</div>
+    <div class="key"><span style="--c:#c6dbef">신축 전 조망</span><span style="--c:#08519c">신축 후 조망</span></div>`;
 }
+
+// ---------------------------------------------------------------- 사용법
+function openHelp() { try { $('help').showModal(); } catch { $('help').setAttribute('open', ''); } }
+$('helpBtn').onclick = openHelp;
+$('helpClose').onclick = () => $('help').close();
+try { if (!localStorage.getItem('uvi-help')) { openHelp(); localStorage.setItem('uvi-help', '1'); } } catch { openHelp(); }
 
 // ---------------------------------------------------------------- 브이월드 3D 시작
 vw.ws3dInitCallBack = () => {
@@ -355,13 +605,15 @@ vw.ws3dInitCallBack = () => {
                             orientation: { heading: 0, pitch: Cesium.Math.toRadians(-50) } });
   });
 };
+setStep(1);
+refreshSteps();
 if (!location.protocol.startsWith('http') || typeof vw === 'undefined') {
-  $('map').innerHTML = `<div style="padding:40px;line-height:1.8">
-    <h3>서버로 실행해야 합니다</h3>
-    브이월드 3D 지도는 인증키가 필요해서, 이 파일을 직접 열면 동작하지 않습니다.<br>
-    1. 브이월드에서 인증키 발급 (서비스 URL: <b>localhost</b>)<br>
+  document.body.insertAdjacentHTML('beforeend', `<div class="gate"><div class="card dlg" style="max-width:520px">
+    <h2>서버로 실행해야 합니다</h2>
+    <p>브이월드 3D 지도는 인증키가 필요해서, 이 파일을 직접 열면 동작하지 않습니다.</p>
+    <div class="ctrl">1. 브이월드 인증키 발급 (서비스 URL: localhost)<br>
     2. 터미널: <code>$env:VWORLD_KEY="발급키"; python viewimpact.py serve</code><br>
-    3. 브라우저: <b>http://localhost:8000</b></div>`;
+    3. 브라우저: <b>http://localhost:8000</b></div></div></div>`);
   throw new Error('브이월드 스크립트 없음');
 }
 const map = new vw.Map();
@@ -369,7 +621,7 @@ map.setOption({
   mapId: 'map',
   initPosition: new vw.CameraPosition(new vw.CoordZ(127.0010, 37.5285, 600), new vw.Direction(0, -30, 0)),  // 한남동
   logo: true,
-  navigation: true,
+  navigation: false,  // 오른쪽 패널과 겹치지 않게. 조작은 마우스로
 });
 map.start();
 })();
