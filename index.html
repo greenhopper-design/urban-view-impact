@@ -64,6 +64,8 @@
   .site-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .site-card b { display: block; }
   .site-card small { color: var(--sub); }
+  .res-site { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-color: var(--accent); background: var(--accent-soft); }
+  .res-site small:first-child { display: block; color: var(--accent); font-weight: 700; font-size: 12px; }
   .row-btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
   .btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 12px; font-weight: 600; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -200,6 +202,10 @@
 
     <section id="res" class="res" hidden>
       <h3>분석 결과</h3>
+      <div class="site-card res-site">
+        <div><small>신축 부지</small><b id="rsName">-</b><small id="rsMeta"></small></div>
+        <button id="goSite" class="btn ghost">부지로 이동</button>
+      </div>
       <div class="kpis">
         <div class="kpi"><small>현재 조망 있는 건물</small><b id="k1">-</b></div>
         <div class="kpi hot"><small>조망 줄어드는 건물</small><b id="k2">-</b></div>
@@ -400,6 +406,19 @@ function draw() {
       prism(b.geometry, gl, gl + Math.max(b.floors, 1) * fh(), grey, b.id);
     }
   }
+  if (site && glCache[site] !== undefined) {  // 신축 부지 표시: 건물 위 라벨 (가려지지 않게)
+    const [lon, lat] = center(data[site].geometry), top = glCache[site] + +$('nf').value * fh();
+    layer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat, top + 4),
+      point: { pixelSize: 10, color: sel, outlineColor: Cesium.Color.WHITE, outlineWidth: 2,
+               disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: { text: `신축 부지 · ${$('nf').value}층 ${Math.round(+$('nf').value * fh())}m`, font: '700 14px Pretendard, sans-serif',
+               fillColor: Cesium.Color.WHITE, showBackground: true, backgroundColor: sel,
+               backgroundPadding: new Cesium.Cartesian2(10, 6), pixelOffset: new Cesium.Cartesian2(0, -16),
+               verticalOrigin: Cesium.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      properties: { bid: site },
+    });
+  }
   for (const t of targets)
     layer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(t.lon, t.lat, t.gl + t.h + 1),
@@ -542,6 +561,8 @@ function showResults(r) {
   const seen = R.filter(x => x.floors.some(f => f.before > 0)).length;
   const avg = Math.round(r.site.floors.reduce((a, f) => a + f.view, 0) / r.site.floors.length);
   const max = hit.length ? hit[0].max_drop : 0;
+  $('rsName').textContent = bname(site);
+  $('rsMeta').textContent = `현재 ${data[site].floors}층 → 신축 ${$('nf').value}층 (${Math.round(+$('nf').value * fh())}m)`;
   $('k1').textContent = `${seen} / ${R.length}`;
   $('k2').textContent = `${hit.length}개`;
   $('k3').textContent = max ? `−${max}%p` : '없음';
@@ -570,6 +591,14 @@ function showResults(r) {
   $('detail').innerHTML = '';
   if (hit.length) detail(hit[0].id);
 }
+
+function flyToSite() {
+  if (!site) return;
+  const [lon, lat] = center(data[site].geometry);
+  viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat - 0.004, glCache[site] + 420),
+                        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-35) } });
+}
+$('goSite').onclick = flyToSite;
 
 // 선택 건물: 층별 신축 전(연한 막대) / 후(진한 막대) 조망률
 function detail(id) {
