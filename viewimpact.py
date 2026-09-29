@@ -17,6 +17,7 @@ import json
 import math
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -69,39 +70,53 @@ def fetch_buildings(bbox):
     if len(ix) * len(iy) > 30:
         raise ValueError("조회 범위가 너무 넓습니다 (조망대상을 더 가까이 두세요)")
     out = {}
-    for i in ix:
-        for j in iy:
-            for f in _fetch_tile(i, j):  # 타일 경계 건물 중복 제거
-                out[f["id"]] = f
+    for feats in TILE_POOL.map(lambda t: _fetch_tile(*t), [(i, j) for i in ix for j in iy]):
+        for f in feats:  # 타일 경계 건물 중복 제거
+            out[f["id"]] = f
     return list(out.values())
+
+
+# 브이월드 왕복 지연이 대부분이라 타일·페이지를 동시에 요청하고 연결을 재사용.
+# 타일 작업이 페이지 작업을 기다리므로 풀을 분리해 교착을 막는다.
+TILE_POOL, PAGE_POOL = ThreadPoolExecutor(8), ThreadPoolExecutor(16)
+HTTP = requests.Session()
+
+
+def _round(c):  # 좌표 소수 6자리(약 10cm): 응답 크기 절반
+    return [_round(x) for x in c] if isinstance(c, list) else round(c, 6)
+
+
+def _fetch_page(box, page):
+    """(건물 목록, 전체 페이지 수)"""
+    r = HTTP.get(VWORLD, timeout=30, params=dict(
+        service="data", request="GetFeature", data="LT_C_SPBD",
+        key=os.environ["VWORLD_KEY"], domain=os.environ.get("VWORLD_DOMAIN", "localhost"),
+        geomFilter="BOX(%.6f,%.6f,%.6f,%.6f)" % box, crs="EPSG:4326",
+        size=1000, page=page, format="json", geometry="true", attribute="true",
+    )).json()["response"]
+    if r["status"] == "NOT_FOUND":
+        return [], 0
+    if r["status"] != "OK":
+        raise RuntimeError("브이월드 오류: %s" % r.get("error", r["status"]))
+    out = []
+    for f in r["result"]["featureCollection"]["features"]:
+        p, g = f["properties"], f["geometry"]
+        out.append({
+            "id": str(f.get("id") or p.get("bd_mgt_sn")),
+            "name": " ".join(filter(None, [p.get("buld_nm"), p.get("buld_nm_dc")])),
+            "floors": int(float(p.get("gro_flo_co") or 0)),
+            "geometry": {"type": g["type"], "coordinates": _round(g["coordinates"])},
+        })
+    return out, int(r["page"]["total"])
 
 
 @lru_cache(maxsize=512)
 def _fetch_tile(i, j):
     box = (i * TILE, j * TILE, (i + 1) * TILE, (j + 1) * TILE)
-    out, page = [], 1
-    while True:
-        r = requests.get(VWORLD, timeout=30, params=dict(
-            service="data", request="GetFeature", data="LT_C_SPBD",
-            key=os.environ["VWORLD_KEY"], domain=os.environ.get("VWORLD_DOMAIN", "localhost"),
-            geomFilter="BOX(%.6f,%.6f,%.6f,%.6f)" % box, crs="EPSG:4326",
-            size=1000, page=page, format="json", geometry="true", attribute="true",
-        )).json()["response"]
-        if r["status"] == "NOT_FOUND":
-            return tuple(out)
-        if r["status"] != "OK":
-            raise RuntimeError("브이월드 오류: %s" % r.get("error", r["status"]))
-        for f in r["result"]["featureCollection"]["features"]:
-            p = f["properties"]
-            out.append({
-                "id": str(f.get("id") or p.get("bd_mgt_sn")),
-                "name": " ".join(filter(None, [p.get("buld_nm"), p.get("buld_nm_dc")])),
-                "floors": int(float(p.get("gro_flo_co") or 0)),
-                "geometry": f["geometry"],
-            })
-        if page >= int(r["page"]["total"]):
-            return tuple(out)
-        page += 1
+    out, total = _fetch_page(box, 1)
+    for more, _ in PAGE_POOL.map(lambda p: _fetch_page(box, p), range(2, total + 1)):
+        out += more
+    return tuple(out)
 
 
 SEARCH = "https://api.vworld.kr/req/search"
