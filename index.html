@@ -208,7 +208,8 @@ async function onClick(e) {
     // 부지 선택: 클릭 지점을 포함하는 건물 외곽선 찾기
     msg('건물 찾는 중…');
     const ids = await loadBuildings(around(ll, 300));
-    let id = ids.find(i => inside(ll, data[i].geometry));
+    // 외곽선이 겹치면(부속동 등) 눈에 보이는 가장 높은 건물
+    let id = ids.filter(i => inside(ll, data[i].geometry)).sort((a, b) => data[b].floors - data[a].floors)[0];
     if (!id) {  // 벽면 클릭 등: 15m 이내 가장 가까운 건물
       const d = i => { const c = center(data[i].geometry); return Math.hypot((c[0] - ll[0]) * 88000, (c[1] - ll[1]) * 110574); };
       id = ids.sort((a, b) => d(a) - d(b))[0];
